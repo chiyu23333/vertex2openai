@@ -1,0 +1,55 @@
+{
+  "name": "vertex2openai",
+  "version": "2.1.5",
+  "description": "OpenAI-compatible API adapter for Google Vertex AI Gemini 3 and Gemini 4 models, running on Cloudflare Workers. Serves both /v1/chat/completions and /v1/responses.",
+  "keywords": [
+    "cloudflare-workers",
+    "openai",
+    "vertex-ai",
+    "gemini",
+    "gemini-3",
+    "gemini-4",
+    "openai-compatible",
+    "responses-api",
+    "llm-proxy"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/workHMZ/vertex2openai-cf.git"
+  },
+  "homepage": "https://github.com/workHMZ/vertex2openai-cf#readme",
+  "bugs": {
+    "url": "https://github.com/workHMZ/vertex2openai-cf/issues"
+  },
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "engines": {
+    "node": "^22.23.4 || ^24.22.1 || ^26.12.1"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "node scripts/deploy.js",
+    "typecheck": "tsc --noEmit",
+    "test": "node scripts/test.js",
+    "test:e2e": "node --test test/e2e/*.test.mjs",
+    "test:argon:gcloud": "node --import ./test/support/register.mjs scripts/test-argon-gcloud.mjs",
+    "test:hydrogen:gcloud": "VERTEX_TEST_MODEL=gemini-4-hydrogen node --import ./test/support/register.mjs scripts/test-argon-gcloud.mjs",
+    "test:carbon:gcloud": "VERTEX_TEST_MODEL=gemini-4-carbon node --import ./test/support/register.mjs scripts/test-argon-gcloud.mjs",
+    "bench": "node --import ./test/support/register.mjs scripts/bench-cpu.mjs",
+    "verify": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261023.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.152.0"
+  },
+  "allowScripts": {
+    "workerd@1.20261019.1": true,
+    "esbuild@0.28.2": true
+  },
+  "overrides": {
+    "undici": "^7.30.1"
+  }
+}

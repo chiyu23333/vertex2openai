@@ -1,0 +1,172 @@
+// ============================================================
+// What a given Gemini model actually supports
+// ============================================================
+
+/**
+ * Parse the family version for baseline support, then apply documented
+ * model-specific restrictions. A newer version does not imply that every
+ * parameter supported by an older model is still accepted.
+ */
+export interface ModelVersion {
+  major: number;
+  minor: number;
+}
+
+export interface ModelCapabilities {
+  /** null for non-Gemini or unparseable ids. */
+  version: ModelVersion | null;
+  /** This adapter targets Gemini 3 and newer only. */
+  isSupported: boolean;
+  /** Generates images, and therefore rejects thinkingConfig. */
+  isImage: boolean;
+  isLite: boolean;
+  isPro: boolean;
+  supportsThinking: boolean;
+  /** Some models reject thinkingLevel: MINIMAL with a 400. */
+  supportsMinimalThinkingLevel: boolean;
+  /** Only some models accept thinkingLevel: XHIGH; others top out at HIGH. */
+  supportsXHighThinkingLevel: boolean;
+  /** Some models reject frequencyPenalty / presencePenalty. */
+  supportsPenalties: boolean;
+  /** False when sampling controls are ignored by the model. */
+  supportsSampling: boolean;
+  /** False when even an explicit candidateCount of one is unsupported. */
+  supportsCandidateCount: boolean;
+}
+
+/** Gemini 2.x reached end of life in October 2026 and is not supported. */
+export const MINIMUM_SUPPORTED_MAJOR = 3;
+
+/**
+ * Models documented as rejecting `thinkingLevel: "MINIMAL"`.
+ * Gemini 3.1 Pro Preview and 3.8 Flash accept LOW as their minimum level.
+ * Requests for MINIMAL fall back to LOW instead of failing upstream.
+ */
+const NO_MINIMAL_THINKING_LEVEL = new Set([
+  "gemini-3.1-pro-preview",
+  "gemini-3.8-flash",
+]);
+
+/**
+ * Gemini 4 Hydrogen, Carbon and Argon API restrictions documented by Google
+ * Cloud: thinkingLevel rejects MINIMAL, custom sampling is ignored,
+ * penalties 400, and candidateCount is fixed at 1.
+ */
+const GEMINI_4_RESTRICTED_MODELS = new Set([
+  "gemini-4-hydrogen",
+  "gemini-4-carbon",
+  "gemini-4-carbon-cyber-permissive",
+  "gemini-4-argon",
+  "gemini-4-argon-cyber-permissive",
+]);
+
+/**
+ * Models that accept `thinkingLevel: "XHIGH"` (verified against the live API,
+ * 2026-11-16). Everywhere else XHIGH folds down to HIGH.
+ */
+const XHIGH_THINKING_LEVEL = new Set(["gemini-4-hydrogen"]);
+
+/**
+ * Models that reject `frequencyPenalty` / `presencePenalty` with
+ * "Penalty is not enabled for this model" (verified against the live API,
+ * 2026-09-07). The parameters are dropped rather than failing the request.
+ */
+const NO_PENALTIES = new Set(["gemini-3.8-flash"]);
+
+const VERSION_RE = /^gemini-(\d+)(?:\.(\d+))?(?:-|$)/;
+const segment = (id: string, word: string) =>
+  new RegExp(`(^|-)${word}(-|$)`).test(id);
+
+export function parseModelVersion(baseModel: string): ModelVersion | null {
+  const m = VERSION_RE.exec(baseModel);
+  if (!m) return null;
+  return { major: Number(m[1]), minor: m[2] ? Number(m[2]) : 0 };
+}
+
+/** True when `version` is at least major.minor. */
+export function atLeast(
+  version: ModelVersion | null,
+  major: number,
+  minor = 0
+): boolean {
+  if (!version) return false;
+  return (
+    version.major > major || (version.major === major && version.minor >= minor)
+  );
+}
+
+export function getModelCapabilities(baseModel: string): ModelCapabilities {
+  const version = parseModelVersion(baseModel);
+  const isSupported = atLeast(version, MINIMUM_SUPPORTED_MAJOR);
+  const isImage = segment(baseModel, "image");
+  const isGemini4Restricted = GEMINI_4_RESTRICTED_MODELS.has(baseModel);
+
+  return {
+    version,
+    isSupported,
+    isImage,
+    isLite: segment(baseModel, "lite"),
+    isPro: segment(baseModel, "pro"),
+    // Every Gemini 3 model thinks; image models reject thinkingConfig.
+    supportsThinking: isSupported && !isImage,
+    supportsMinimalThinkingLevel:
+      !isGemini4Restricted && !NO_MINIMAL_THINKING_LEVEL.has(baseModel),
+    supportsXHighThinkingLevel: XHIGH_THINKING_LEVEL.has(baseModel),
+    supportsPenalties: !isGemini4Restricted && !NO_PENALTIES.has(baseModel),
+    supportsSampling: !isGemini4Restricted,
+    supportsCandidateCount: !isGemini4Restricted,
+  };
+}
+
+export type ThinkingLevel = "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | "XHIGH";
+
+/**
+ * OpenAI's reasoning_effort vocabulary, including the `xhigh`/`max` values
+ * added alongside the Responses API. Most Gemini models top out at HIGH;
+ * XHIGH is clamped down where it is not accepted.
+ */
+const EFFORT_TO_LEVEL: Record<string, ThinkingLevel> = {
+  none: "MINIMAL",
+  minimal: "MINIMAL",
+  low: "LOW",
+  medium: "MEDIUM",
+  high: "HIGH",
+  xhigh: "XHIGH",
+  max: "XHIGH",
+};
+
+/**
+ * Map reasoning_effort onto a thinkingLevel the model will accept.
+ * Returns undefined when the caller asked for nothing recognisable.
+ */
+export function resolveThinkingLevel(
+  effort: string | undefined,
+  caps: ModelCapabilities
+): ThinkingLevel | undefined {
+  if (!effort) return undefined;
+  const level = EFFORT_TO_LEVEL[effort.toLowerCase()];
+  if (!level) return undefined;
+  return clampThinkingLevel(level, caps);
+}
+
+/**
+ * Downgrade MINIMAL to LOW and XHIGH to HIGH on models that reject them,
+ * rather than 400ing.
+ */
+export function clampThinkingLevel(
+  level: ThinkingLevel,
+  caps: ModelCapabilities
+): ThinkingLevel {
+  if (level === "MINIMAL" && !caps.supportsMinimalThinkingLevel) return "LOW";
+  if (level === "XHIGH" && !caps.supportsXHighThinkingLevel) return "HIGH";
+  return level;
+}
+
+/** Message shown when a caller asks for a model this adapter no longer serves. */
+export function unsupportedModelMessage(baseModel: string): string {
+  const version = parseModelVersion(baseModel);
+  if (version && version.major < MINIMUM_SUPPORTED_MAJOR) {
+    return `Model '${baseModel}' is from the Gemini ${version.major}.x family, which reached end of life and is no longer supported. Use a Gemini ${MINIMUM_SUPPORTED_MAJOR}.x model — see GET /v1/models.`;
+  }
+  return `Unrecognised model '${baseModel}'. This adapter serves Gemini ${MINIMUM_SUPPORTED_MAJOR}.x models — see GET /v1/models.`;
+}
